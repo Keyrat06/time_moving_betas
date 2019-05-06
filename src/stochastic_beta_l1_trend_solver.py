@@ -5,7 +5,7 @@ from src.util import make_data, plot_tends, time_it
 
 
 @time_it
-def beta_l1_trend_solver(y, x, l1=0.01, l2=0.001, a=0.1, b=0.1, iterations=10000, con=100):
+def beta_l1_trend_solver(y, x, l1=0.01, l2=0.001, a=0.1, b=0.1, iterations=10000, thresh=1e-6, con=20):
     """
     Solves dynamic beta motion using stochastic gradient decent.
     Using momentum gradient decent for additional stability.
@@ -29,7 +29,8 @@ def beta_l1_trend_solver(y, x, l1=0.01, l2=0.001, a=0.1, b=0.1, iterations=10000
     :param a: gradient decent momentum param | scalar
     :param b: gradient step | scalar
     :param iterations: max number of iterations | scalar
-    :param con: number of turns that current loss can be worse then best loss
+    :param thresh: threshold to be considered no improvement
+    :param con: number of iterations with no improvement
     :return: B_-1 [N, K] numpy array, losses, betas
     """
     n, k = x.shape
@@ -41,9 +42,9 @@ def beta_l1_trend_solver(y, x, l1=0.01, l2=0.001, a=0.1, b=0.1, iterations=10000
 
     def get_d_loss(beta):
         y_hat = (beta * x).sum(axis=1)
-        d_beta_d_t = np.diff(beta, axis=0)
+        sighn_d_beta_d_t = np.sign(np.diff(beta, axis=0))
         track_loss = -x * (y-y_hat)[:, np.newaxis]
-        motion_loss = -1 * np.vstack((np.sign(d_beta_d_t), np.zeros(k)))
+        motion_loss = np.vstack((np.zeros(k), sighn_d_beta_d_t)) - np.vstack((sighn_d_beta_d_t, np.zeros(k)))
         shrink_loss = np.sign(beta)
         return track_loss + l1 * motion_loss + l2 * shrink_loss
 
@@ -54,6 +55,7 @@ def beta_l1_trend_solver(y, x, l1=0.01, l2=0.001, a=0.1, b=0.1, iterations=10000
     dloss = float("inf")
     betas = []
     tbar = trange(iterations)
+    last_improvement = 0
     for i in tbar:
         # Calculate Gradient and momentum gradient
         dloss_db = get_d_loss(beta)
@@ -67,9 +69,14 @@ def beta_l1_trend_solver(y, x, l1=0.01, l2=0.001, a=0.1, b=0.1, iterations=10000
         # Gradient Descend
         beta -= b * dbeta
 
-        best_beta_index = np.argmin(losses)
-        if (i-best_beta_index) > con:
-            break
+        if len(losses) > 1:
+            dloss = (losses[-2] - losses[-1])
+            if dloss < thresh:
+                if last_improvement >= con:
+                    break
+                last_improvement += 1
+            else:
+                last_improvement = 0
 
         tbar.set_description("Loss {:.5f} dLoss {:.6f}".format(loss, dloss))
         tbar.refresh()
@@ -92,6 +99,7 @@ if __name__ == "__main__":
     parser.add_argument("-b", "--beta", type=float, default=0.1)
     parser.add_argument("-i", "--iterations", type=int, default=1000)
     parser.add_argument("-s", "--sigma", type=float, default=1e-3)
+    parser.add_argument("-t", "--thresh", type=float, default=1e-3)
     parser.add_argument("-c", "--con", type=int, default=100)
 
     args = parser.parse_args()
@@ -103,10 +111,11 @@ if __name__ == "__main__":
     b = args.beta
     s = args.sigma
     iters = args.iterations
+    thresh=args.thresh
     con = args.con
 
     x, y, true_beta = make_data(n, k, s)
-    beta_hat, losses, betas = beta_l1_trend_solver(y, x, l1=l1, l2=l2, a=a, b=b, iterations=iters, con=con)
+    beta_hat, losses, betas = beta_l1_trend_solver(y, x, l1=l1, l2=l2, a=a, b=b, iterations=iters, thresh=thresh, con=con)
 
     plot_tends(((true_beta, "true_beta"), (beta_hat, "beta_hat")))
     import matplotlib.pyplot as plt
